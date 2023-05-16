@@ -1,0 +1,468 @@
+
+library(StanHeaders)
+library(ggplot2)
+library(rstan)
+library(extraDistr)
+library(R2jags)
+
+
+### Bayesian Homework 1 
+### 01 Modelling Earthquake Waiting Times
+
+### redo simulations using stan 
+
+
+# 1. Prior pdf for𝜆: generate random numbers that follow gamma distribution
+
+
+gamma <- "
+    //functions {}
+    data{
+        real<lower=0> alpha;
+        real<lower=0> beta;
+        }
+    transformed data {}
+    parameters{}
+    transformed parameters {}
+    model{ }
+    generated quantities{
+        real sim_lambda=gamma_rng(alpha,beta);
+        }
+"
+
+mod=stan_model( model_code=gamma ) 
+
+# Generate posterior sample:
+fit<- sampling( object=mod,
+                data = dataList, algorithm="Fixed_param",
+                chains = 3, seed = 24056, iter = 5000,
+                warmup = 0, thin = 1)
+
+### Extract random numbers
+
+sim_lambda<-extract(fit,par="sim_lambda")$sim_lambda
+# Discard the unneeded attribute
+attr(sim_lambda,"dimnames")<-NULL
+str(sim_lambda)
+
+#### Obtain mean, standard deviation and variance for random numbers
+
+mean(sim_lambda) ### sample mean is 0.03286817, theoretical mean is 0.0333
+sd(sim_lambda) ### sample sd is 0.03314099, theoretical sd is 0.0011
+var(sim_lambda) ### sample variance is  0.001098325, theoretical variance is 0.0333
+
+
+####### plot random numbers 
+
+sim_lambda.max<-max(sim_lambda)
+u<-seq(0,sim_lambda.max,length=1000)
+df.theor<-dgamma(u,shape=a,rate=b)
+f.max<-max(df.theor)
+hist(sim_lambda,freq=FALSE,col="LightSkyBlue",ylim=c(0,f.max*1.1),
+     main=sprintf("Histogram of Gamma(%2.1f,%2.1f) random numbers
+    \n with the superimposed theoretical pdf",a,b),nclass=60,cex.main=1.6)
+lines(u,df.theor,lwd=2.5,col="blue")
+
+
+
+##### prior predictive pdf for the waiting time
+
+exp.code <- "
+    //functions {}
+    data{
+        real<lower=0> lambda;
+        }
+    //transformed data {}
+    //parameters{}
+    //transformed parameters {}
+    //model{ }
+    generated quantities{
+        real sim_y;
+        sim_y=exponential_rng(lambda);
+        }
+"
+
+mod.response<- stan_model( model_code=exp.code) 
+
+# Specify data:
+
+lambda=mean(sim_lambda)
+
+dataList <- list("lambda" = lambda)
+
+# Generate posterior sample:
+fit<- sampling( object=mod.response, 
+                         data = dataList, algorithm="Fixed_param",
+                         chains = 3, seed = 24025, iter = 10000,
+                         warmup = 0, thin = 1)
+
+
+
+### Extract random numbers
+
+sim_y<-extract(fit,par="sim_y")$sim_y
+# Discard the unneeded attribute
+attr(sim_y,"dimnames")<-NULL
+str(sim_y)
+
+#### Obtain mean, standard deviation and variance for random numbers
+
+mean(sim_y)  
+sd(sim_y) 
+var(sim_y) 
+
+
+####### plot random numbers 
+
+sim_y.max<-max(sim_y)
+u<-seq(0,sim_y.max,length=1000)
+df.theor<-dexp(u,rate=lambda)
+f.max<-max(df.theor)
+hist(sim_y,freq=FALSE,col="LightSkyBlue",ylim=c(0,f.max*1.1),
+     main=sprintf("Histogram of Exp random numbers"),
+     nclass=60,cex.main=1.6)
+lines(u,df.theor,lwd=2.5,col="blue")
+
+
+
+######## Posterior for lambda and predicitions 
+
+earth<-"
+data{
+int<lower=1> N;
+vector[N] y;
+}
+
+parameters{
+real<lower=0> lambda;
+}
+
+model {
+real alpha;
+real beta;
+alpha <- 1;
+beta <- 30;
+
+lambda ~ gamma(alpha, beta);
+
+y ~ exponential(lambda);
+
+}
+
+generated quantities{
+real pred;
+pred<-exponential_rng(lambda);
+
+}
+
+"
+
+## data 
+y=c(16,8,114,60,4,23,30,105)
+
+N <- length(y)
+dat <- list(N=N,y=y)
+fit <- stan(model_code = earth , 
+            data = dat, iter = 2000, chains = 3)
+
+summary(fit)
+
+## extract posterior for lambda and predicitions
+sample<-as.data.frame(fit)
+
+
+## 3. Posterior pdf for𝜆 
+
+### extract posterior lambda
+
+lambda=sample$lambda
+
+hist(lambda)
+plot(density(lambda))
+
+mean(lambda) ### posterior mean lambda is 0.0231035 and theoretical mean is 0.0231
+var(lambda) ## psoterior variance lambda is 5.722442e-05, theoretical variance is 5.9e-05
+sd(lambda) ## posterior sd lambda is 0.007564683 and theoretical sd is 0.0077
+
+### 4. Posterior predictive for new waiting time
+
+pred=sample$pred
+
+hist(pred)
+plot(density(pred))
+
+mean(pred) ## posterior mean y is 49.30334, theoretical mean y is 48.75
+var(pred) ## posterior var y is 3293.937, theoretical var y is 3055.58 
+sd(pred) ## posterior sd y is 57.39283, theoretical sd y is 55.277
+
+
+
+# 02 - A more elaborate mixture prior for the spinning coin
+
+# (1) Using the theoretical formulas (prior predictive pmf, 
+# posterior pdf, posterior predictive pmf)
+
+prior.a1=10
+prior.b1=20
+
+prior.a2=15
+prior.b2=15
+
+prior.a3=20
+prior.b3=10
+
+
+### 
+
+prior.gamma1=0.5
+prior.gamma2=0.2
+prior.gamma3=0.3
+
+# Number of trials
+n<-10
+# Observed x
+x<-3
+
+### calculate prior predictive pmf 
+
+f1<-function(x){dbbinom(x,size=n,alpha=prior.a1,beta=prior.b1)}
+f2<-function(x){dbbinom(x,size=n,alpha=prior.a2,beta=prior.b2)}
+f3<-function(x){dbbinom(x,size=n,alpha=prior.a3,beta=prior.b3)}
+
+
+Theor.prior.predictive.pmf=function(x){
+  return(prior.gamma1*f1(x)+prior.gamma2*f2(x) +prior.gamma3*f3(x))
+}
+
+Theor.prior.predictive.pmf(x=3)
+
+### calculate posterior pdf 
+
+# Posterior weights
+# for the observed x
+x.obs<-3
+
+f1x<-f1(x.obs)
+f2x<-f2(x.obs)
+f3x<-f3(x.obs)
+round(f1x,4)
+round(f2x,4)
+round(f3x,4)
+
+posterior.gamma1<-prior.gamma1*f1x/(prior.gamma1*f1x+prior.gamma2*f2x
+                                   +prior.gamma3*f3x)
+posterior.gamma2<-prior.gamma2*f2x/(prior.gamma1*f1x+prior.gamma2*f2x
+                                    +prior.gamma3*f3x)
+
+posterior.gamma3<-prior.gamma3*f3x/(prior.gamma1*f1x+prior.gamma2*f2x
+                                    +prior.gamma3*f3x)
+
+round(posterior.gamma1,4)
+round(posterior.gamma2,4)
+round(posterior.gamma3,4)
+
+posterior.a1<-prior.a1+x.obs
+posterior.b1<-prior.b1+n-x.obs
+posterior.a2<-prior.a2+x.obs
+posterior.b2<-prior.b2+n-x.obs
+posterior.a3<-prior.a3+x.obs
+posterior.b3<-prior.b3+n-x.obs
+
+
+# Theoretical posterior pdf
+
+mixture.posterior.pdf<-function(theta){
+  return(posterior.gamma1*dbeta(theta,posterior.a1,posterior.b1)
+         +posterior.gamma2*dbeta(theta,posterior.a2,posterior.b2)
+  +posterior.gamma3*dbeta(theta,posterior.a3,posterior.b3))}
+
+
+
+### calculate posterior predictive pmf
+
+Theor.posterior.predictive.pmf=function(x){
+  return(posterior.gamma1*f1(x)+posterior.gamma2*f2(x) 
+         +posterior.gamma3*f3(x))
+}
+
+
+# 2) Using independent random numbers (rbeta() functions, etc.)
+
+prior.a1=rbeta(1,10,20)
+prior.b1=rbeta(1,10,20)
+
+prior.a2=rbeta(1,15,15)
+prior.b2=rbeta(1,15,15)
+
+prior.a3=rbeta(1,20,10)
+prior.b3=rbeta(1,20,10)
+
+
+
+### calculate prior predictive pmf 
+
+f1<-function(x){dbbinom(x,size=n,alpha=prior.a1,beta=prior.b1)}
+f2<-function(x){dbbinom(x,size=n,alpha=prior.a2,beta=prior.b2)}
+f3<-function(x){dbbinom(x,size=n,alpha=prior.a3,beta=prior.b3)}
+
+
+Theor.prior.predictive.pmf=function(x){
+  return(prior.gamma1*f1(x)+prior.gamma2*f2(x) +prior.gamma3*f3(x))
+}
+
+
+
+# Theoretical posterior pdf
+
+mixture.posterior.pdf<-function(theta){
+  return(posterior.gamma1*dbeta(theta,posterior.a1,posterior.b1)
+         +posterior.gamma2*dbeta(theta,posterior.a2,posterior.b2)
+         +posterior.gamma3*dbeta(theta,posterior.a3,posterior.b3))}
+
+
+
+
+### calculate posterior predictive pmf
+
+Theor.posterior.predictive.pmf=function(x){
+  return(posterior.gamma1*f1(x)+posterior.gamma2*f2(x) 
+         +posterior.gamma3*f3(x))
+}
+
+
+
+
+
+
+
+### JAGS treatment
+
+
+prior.a1=10
+prior.b1=20
+
+prior.a2=15
+prior.b2=15
+
+prior.a3=20
+prior.b3=10
+
+
+### 
+
+prior.gamma1=0.5
+prior.gamma2=0.2
+prior.gamma3=0.3
+
+# Number of trials
+n<-10
+# Observed x
+x.obs<-3
+
+Mix.01.dat<-list(a1=prior.a1,b1=prior.b1,a2=prior.a2,
+                 b2=prior.b2, a3=prior.a3,b3=prior.b3,
+                 gamma1=prior.gamma1,gamma2=prior.gamma2,
+                 gamma3=prior.gamma3,
+                 n=n,x=x.obs)
+
+### Model 
+
+mod(
+  "model
+    {
+    x~dbin(p,n)             # Binomial likelihood. 
+    
+    p<-theta[r]             # Prior is a mixture of two beta r.v 
+                            # Notice the syntax: this statement says that p is
+                            # *equal to* the pair of theta variates defined below
+
+    r~dcat(g[])             # Categorical distribution:
+                            # g[] is a 2-vector containing the mixing probabilities (gamma, 1-gamma)
+
+    theta[1]~dbeta(a1,b1)   # The two beta r.v to enter the mixture
+    theta[2]~dbeta(a2,b2)
+    theta[3]~dbeta(a3,b3)
+
+    g[1]<-gamma1             # Just as in p. g is equal to (gamma, 1-gamma)
+    g[2]<-gamma2
+    g[3]<-gamma3
+    }"
+  ,file="Mix.01.jag")
+
+
+### Run Jags 
+
+Mix.01.m1<-jags(data=Mix.01.dat, n.chains=3,n.iter=5000,n.burnin=500, 
+                parameters.to.save=c("theta","p"), model.file="Mix.01.jag")
+
+p.sample<-Mix.01.m1$BUGSoutput$sims.list$p
+
+p.sample.density<-density(p.sample)
+plot(p.sample.density,lwd=2.5,col="blue",
+     main=expression(paste("Estimated posterior pdf of ",p)),
+     cex.main=1.6)
+
+### Stan treatment 
+
+modelString = "
+    data{
+        int<lower=0> n ;
+        int<lower=0> x ; 
+        real<lower=0> a1 ;
+        real<lower=0> b1 ;
+        real<lower=0> a2 ;
+        real<lower=0> b2 ;
+        real<lower=0> a3;
+        real<lower=0> b3;
+        real<lower=0,upper=1>  gamma1 ;
+        real<lower=0,upper=1>  gamma2 ;
+        real<lower=0,upper=1>  gamma3 ;
+        }
+    parameters{
+        real<lower=0,upper=1>  u ;
+        vector<lower=0,upper=1>[2] theta ;
+        }
+    transformed parameters{                         
+        real<lower=0,upper=1> p ;                   
+                                                    
+        p=theta[u<gamma?1:3] ;
+        }
+    model{
+        x ~ binomial(n,p) ;
+        theta[1]~beta(a1,b1) ;
+        theta[2]~beta(a2,b2) ;
+        theta[3]~beta(a3,b3);
+        u ~ uniform(0,1) ; 
+        
+        
+        
+        
+        }"
+
+
+
+# Number of trials
+n<-10
+# Observed x
+x.obs<-3
+
+dat<-list(a1=prior.a1,b1=prior.b1,
+                     a2=prior.a2,b2=prior.b2,
+                     a3=prior.a3,b3=prior.b3,
+                     gamma1=prior.gamma1,gamma2=prior.gamma2,
+                     gamma3=prior.gamma3,
+                     n=n,x=x.obs)
+
+
+mod=stan(model_code = modelString , 
+     data =dat , iter = 2000, chains = 3)
+
+## extract posterior for lambda and predicitions
+sample<-as.data.frame(fit)
+
+
+
+
+
+
+
